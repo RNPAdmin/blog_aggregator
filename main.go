@@ -5,8 +5,12 @@ import (
 	"blog_aggregator/internal/database"
 	"context"
 	"database/sql"
+	"encoding/xml"
 	"fmt"
+	"html"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -26,6 +30,65 @@ type command struct {
 
 type commands struct {
 	registeredCommands map[string]func(*state, command) error
+}
+
+type RSSFeed struct {
+	Channel struct {
+		Title       string    `xml:"title"`
+		Link        string    `xml:"link"`
+		Description string    `xml:"description"`
+		Item        []RSSItem `xml:"item"`
+	} `xml:"channel"`
+}
+
+type RSSItem struct {
+	Title       string `xml:"title"`
+	Link        string `xml:"link"`
+	Description string `xml:"description"`
+	PubDate     string `xml:"pubDate"`
+}
+
+func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", feedURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("User-Agent", "gator")
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var feed RSSFeed
+
+	err = xml.Unmarshal(data, &feed)
+	if err != nil {
+		return nil, err
+	}
+
+	feed.Channel.Title = html.UnescapeString(feed.Channel.Title)
+
+	feed.Channel.Description = html.UnescapeString(feed.Channel.Description)
+
+	for i, item := range feed.Channel.Item {
+		item.Title = html.UnescapeString(item.Title)
+		item.Description = html.UnescapeString(item.Description)
+		feed.Channel.Item[i] = item
+	}
+
+	return &feed, nil
 }
 
 func handlerLogin(s *state, cmd command) error {
@@ -75,6 +138,28 @@ func handlerRegister(s *state, cmd command) error {
 	}
 
 	fmt.Printf("New username has been set: %s", user.Name)
+
+	return nil
+}
+
+func handlerAgg(s *state, cmd command) error {
+	feedURL := "https://www.wagslane.dev/index.xml"
+
+	feed, err := fetchFeed(context.Background(), feedURL)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Feed Title: %s\n", feed.Channel.Title)
+	fmt.Printf("Feed Link: %s\n", feed.Channel.Link)
+	fmt.Printf("Feed Description: %s\n", feed.Channel.Description)
+
+	for _, item := range feed.Channel.Item {
+		fmt.Printf("\nItem Title: %s\n", item.Title)
+		fmt.Printf("Item Link: %s\n", item.Link)
+		fmt.Printf("Item Description: %s\n", item.Description)
+		fmt.Printf("Item PubDate: %s\n", item.PubDate)
+	}
 
 	return nil
 }
@@ -157,6 +242,7 @@ func main() {
 	cmds.register("register", handlerRegister)
 	cmds.register("reset", reset)
 	cmds.register("users", users)
+	cmds.register("agg", handlerAgg)
 
 	if len(os.Args) < 2 {
 		log.Fatal("Usage: cli <command> [args...]")
