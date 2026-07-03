@@ -123,7 +123,7 @@ func handlerRegister(s *state, cmd command) error {
 	now := time.Now()
 
 	user, err := s.db.CreateUser(context.Background(), database.CreateUserParams{
-		ID:        int32(uuid.New().ID()),
+		ID:        uuid.New(),
 		CreatedAt: now,
 		UpdatedAt: now,
 		Name:      userName,
@@ -159,6 +159,39 @@ func handlerAgg(s *state, cmd command) error {
 		fmt.Printf("Item Link: %s\n", item.Link)
 		fmt.Printf("Item Description: %s\n", item.Description)
 		fmt.Printf("Item PubDate: %s\n", item.PubDate)
+	}
+
+	return nil
+}
+
+func handlerAddFeed(s *state, cmd command) error {
+	if len(cmd.Args) < 2 {
+		return fmt.Errorf("Expecting name and url to add feed.")
+	}
+
+	name := cmd.Args[0]
+
+	feedURL := cmd.Args[1]
+
+	now := time.Now()
+
+	currentUserName := s.cfg.Name
+
+	user, err := s.db.GetUser(context.Background(), currentUserName)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.CreateFeed(context.Background(), database.CreateFeedParams{
+		ID:        uuid.New(),
+		CreatedAt: now,
+		UpdatedAt: now,
+		Name:      name,
+		Url:       feedURL,
+		UserID:    user.ID,
+	})
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -243,6 +276,7 @@ func main() {
 	cmds.register("reset", reset)
 	cmds.register("users", users)
 	cmds.register("agg", handlerAgg)
+	cmds.register("addfeed", handlerAddFeed)
 
 	if len(os.Args) < 2 {
 		log.Fatal("Usage: cli <command> [args...]")
