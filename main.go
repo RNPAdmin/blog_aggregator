@@ -297,16 +297,15 @@ func unfollow(s *state, cmd command, user database.User) error {
 		return err
 	}
 
-	feedFollow, err := s.db.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
-		ID:     uuid.New(),
-		UserID: user.ID,
+	err = s.db.DeleteFeedFollow(context.Background(), database.DeleteFeedFollowParams{
 		FeedID: feed.ID,
+		UserID: user.ID,
 	})
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("User %s is now unfollowing feed %s\n", feedFollow.UserName, feedFollow.FeedName)
+	fmt.Printf("User %s is now unfollowing feed %s\n", user.Name, feed.Name)
 	return nil
 }
 
@@ -320,9 +319,9 @@ func following(s *state, cmd command, user database.User) error {
 		return err
 	}
 
-	fmt.Printf("Feeds followed by user %s:\n", user)
+	fmt.Printf("Feeds followed by user %s:\n", user.Name)
 	for _, feed := range followedFeeds {
-		fmt.Printf("- %s (%s)\n", feed.FeedName, feed.FeedName)
+		fmt.Printf("- %s (%s)\n", feed.FeedName, feed.UserName)
 	}
 
 	return nil
