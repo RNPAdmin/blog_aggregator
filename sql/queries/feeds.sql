@@ -1,12 +1,13 @@
 -- name: CreateFeed :one
-INSERT INTO feeds (id, created_at, updated_at, name, url, user_id)
+INSERT INTO feeds (id, created_at, updated_at, name, url, user_id, last_fetched_at)
 VALUES (
     $1,
     $2,
     $3,
     $4,
     $5,
-    $6
+    $6,
+    $7
 )
 RETURNING *;
 
@@ -47,6 +48,19 @@ FROM feed_follows
 INNER JOIN feeds ON feeds.id = feed_follows.feed_id
 INNER JOIN users ON users.id = feed_follows.user_id
 WHERE feed_follows.user_id = $1;
+
+-- name: MarkFeedFetched :one
+UPDATE feeds
+SET last_fetched_at = Now(),
+ updated_at = Now()
+WHERE id = $1
+RETURNING *;
+
+-- name: GetNextFeedToFetch :one
+SELECT *
+FROM feeds
+ORDER BY last_fetched_at ASC NULLS FIRST
+LIMIT 1;
 
 -- name: DeleteFeedFollow :exec
 DELETE FROM feed_follows

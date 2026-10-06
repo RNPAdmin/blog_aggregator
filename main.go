@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -91,6 +92,54 @@ func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
 	return &feed, nil
 }
 
+func scrapeFeeds(s *state) {
+	feed, err := s.db.GetNextFeedToFetch(context.Background())
+	if err != nil {
+		log.Println("Couldn't get next feeds to fetch", err)
+		return
+	}
+	log.Println("Found a feed to fetch!")
+	scrapeFeed(s.db, feed)
+}
+
+func scrapeFeed(db *database.Queries, feed database.Feed) {
+	_, err := db.MarkFeedFetched(context.Background(), feed.ID)
+	if err != nil {
+		log.Printf("Couldn't mark feed %s fetched: %v", feed.Name, err)
+		return
+	}
+
+	feedData, err := fetchFeed(context.Background(), feed.Url)
+	if err != nil {
+		log.Printf("Couldn't collect feed %s: %v", feed.Name, err)
+		return
+	}
+
+	for _, item := range feedData.Channel.Item {
+		var publishedAt sql.NullTime
+		if item.PubDate != "" {
+			parsedTime, err := time.Parse(time.RFC1123Z, item.PubDate)
+			if err == nil {
+				publishedAt = sql.NullTime{Time: parsedTime, Valid: true}
+			}
+		}
+		_, err := db.CreatePost(context.Background(), database.CreatePostParams{
+			ID:          uuid.New(),
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+			Title:       item.Title,
+			Url:         item.Link,
+			Description: item.Description,
+			PublishedAt: publishedAt,
+			FeedID:      feed.ID,
+		})
+		if err != nil {
+			log.Printf("Couldn't create post for feed %s: %v", feed.Name, err)
+		}
+	}
+	log.Printf("Feed %s collected, %v posts found", feed.Name, len(feedData.Channel.Item))
+}
+
 func handlerLogin(s *state, cmd command) error {
 	if len(cmd.Args) == 0 {
 		return fmt.Errorf("login requires a username")
@@ -143,25 +192,22 @@ func handlerRegister(s *state, cmd command) error {
 }
 
 func handlerAgg(s *state, cmd command) error {
-	feedURL := "https://www.wagslane.dev/index.xml"
+	if len(cmd.Args) != 1 {
+		return fmt.Errorf("usage: %v <time_between_reqs>", cmd.Name)
+	}
 
-	feed, err := fetchFeed(context.Background(), feedURL)
+	timeBetweenRequests, err := time.ParseDuration(cmd.Args[0])
 	if err != nil {
-		return err
+		return fmt.Errorf("invalid duration: %w", err)
 	}
 
-	fmt.Printf("Feed Title: %s\n", feed.Channel.Title)
-	fmt.Printf("Feed Link: %s\n", feed.Channel.Link)
-	fmt.Printf("Feed Description: %s\n", feed.Channel.Description)
+	log.Printf("Collecting feeds every %s...", timeBetweenRequests)
 
-	for _, item := range feed.Channel.Item {
-		fmt.Printf("\nItem Title: %s\n", item.Title)
-		fmt.Printf("Item Link: %s\n", item.Link)
-		fmt.Printf("Item Description: %s\n", item.Description)
-		fmt.Printf("Item PubDate: %s\n", item.PubDate)
+	ticker := time.NewTicker(timeBetweenRequests)
+
+	for ; ; <-ticker.C {
+		scrapeFeeds(s)
 	}
-
-	return nil
 }
 
 func handlerAddFeed(s *state, cmd command, user database.User) error {
@@ -344,6 +390,38 @@ func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) 
 	}
 }
 
+func browse(s *state, cmd command, user database.User) error {
+	if len(cmd.Args) > 1 {
+		return fmt.Errorf("usage: %s [limit]", cmd.Name)
+	}
+
+	limit := int32(2)
+	if len(cmd.Args) == 1 {
+		parsedLimit, err := strconv.ParseInt(cmd.Args[0], 10, 32)
+		if err != nil || parsedLimit <= 0 {
+			return fmt.Errorf("limit must be a positive integer")
+		}
+		limit = int32(parsedLimit)
+	}
+
+	posts, err := s.db.GetPosts(context.Background(), limit)
+	if err != nil {
+		return err
+	}
+
+	for _, post := range posts {
+		fmt.Printf("Title: %s\n", post.Title)
+		fmt.Printf("URL: %s\n", post.Url)
+		fmt.Printf("Description: %s\n", post.Description)
+		if post.PublishedAt.Valid {
+			fmt.Printf("Published: %s\n", post.PublishedAt.Time.Format(time.RFC1123Z))
+		}
+		fmt.Println()
+	}
+
+	return nil
+}
+
 func (c *commands) register(name string, f func(*state, command) error) {
 	c.registeredCommands[name] = f
 }
@@ -390,6 +468,7 @@ func main() {
 	cmds.register("follow", middlewareLoggedIn(follow))
 	cmds.register("unfollow", middlewareLoggedIn(unfollow))
 	cmds.register("following", middlewareLoggedIn(following))
+	cmds.register("browse", middlewareLoggedIn(browse))
 
 	if len(os.Args) < 2 {
 		log.Fatal("Usage: cli <command> [args...]")
